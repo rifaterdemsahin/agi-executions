@@ -1,15 +1,313 @@
 {
-  "name": "Sample Logging Workflow",
+  "name": "Save Data to GitHub Workflow",
   "nodes": [
     {
       "parameters": {
-        "functionCode": "const fs = require('fs');\nfs.appendFileSync('/workspaces/agi-executions/logs/n8n/sample.log', 'Workflow executed at ' + new Date().toISOString() + '\n');\nreturn items;"
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1"
+            }
+          ]
+        }
       },
-      "name": "Log Execution",
-      "type": "n8n-nodes-base.function",
+      "id": "cron-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.cron",
       "typeVersion": 1,
-      "position": [450, 300]
+      "position": [
+        240,
+        300
+      ],
+      "notes": "🕒 TRIGGER NODE: Runs every Monday at 9:00 AM\n\nThis cron trigger initiates the workflow automatically. You can also use:\n- Manual Trigger for testing\n- Webhook Trigger for external API calls\n- HTTP Request Trigger for form submissions\n\nCron Expression: '0 9 * * 1' means:\n- 0: minute (0th minute)\n- 9: hour (9 AM)\n- *: any day of month\n- *: any month\n- 1: Monday (0=Sunday, 1=Monday, etc.)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate sample data that we want to save to GitHub\nconst currentDate = new Date().toISOString();\nconst timestamp = Date.now();\n\n// Sample dataset - replace this with your actual data source\nconst sampleData = {\n  timestamp: currentDate,\n  reportId: `report_${timestamp}`,\n  metrics: {\n    totalUsers: Math.floor(Math.random() * 10000) + 1000,\n    activeUsers: Math.floor(Math.random() * 5000) + 500,\n    revenue: (Math.random() * 50000 + 10000).toFixed(2),\n    conversionRate: (Math.random() * 0.1 + 0.02).toFixed(3)\n  },\n  status: 'success',\n  generatedBy: 'n8n-workflow'\n};\n\n// Convert data to formatted JSON string for GitHub file\nconst jsonContent = JSON.stringify(sampleData, null, 2);\n\n// Create filename with timestamp\nconst filename = `data/reports/report_${new Date().toISOString().split('T')[0]}.json`;\n\nreturn {\n  json: {\n    fileContent: jsonContent,\n    fileName: filename,\n    commitMessage: `Add automated report for ${new Date().toLocaleDateString()}`,\n    rawData: sampleData\n  }\n};"
+      },
+      "id": "data-processor",
+      "name": "Process Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ],
+      "notes": "⚙️ DATA PROCESSING NODE: Prepare data for GitHub\n\nThis Code node:\n1. Generates or processes your source data\n2. Formats data as JSON string for file content\n3. Creates a filename with timestamp\n4. Prepares commit message\n\nCustomization tips:\n- Replace sampleData with your actual data source\n- Modify filename pattern as needed\n- Add data validation/transformation logic\n- Consider data encryption for sensitive info\n\nOutputs:\n- fileContent: JSON string to save\n- fileName: Path in repository\n- commitMessage: Git commit description\n- rawData: Original data for reference"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "file",
+        "operation": "get",
+        "owner": {
+          "__rl": true,
+          "value": "your-github-username",
+          "mode": "name"
+        },
+        "repository": {
+          "__rl": true,
+          "value": "your-repository-name",
+          "mode": "name"
+        },
+        "filePath": "={{ $json.fileName }}"
+      },
+      "id": "check-file",
+      "name": "Check File Exists",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [
+        680,
+        300
+      ],
+      "continueOnFail": true,
+      "notes": "📁 FILE CHECK NODE: Verify if file already exists\n\nThis GitHub node attempts to get the existing file to:\n1. Check if file already exists in repository\n2. Get the current SHA (required for updates)\n3. Determine if we should CREATE or UPDATE\n\nSettings:\n- continueOnFail: true (prevents workflow stop if file doesn't exist)\n- Uses OAuth2 authentication (recommended)\n- Dynamic filePath from previous node\n\nImportant:\n- Replace 'your-github-username' with actual username\n- Replace 'your-repository-name' with actual repo name\n- Ensure repository exists and has proper permissions\n- OAuth2 setup required in n8n credentials"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "file-exists-condition",
+              "leftValue": "={{ $node['Check File Exists'].json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "file-exists-switch",
+      "name": "File Exists?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        900,
+        300
+      ],
+      "notes": "🔀 DECISION NODE: Route based on file existence\n\nThis Switch node checks if the previous GitHub call failed:\n- TRUE path: File doesn't exist → CREATE new file\n- FALSE path: File exists → UPDATE existing file\n\nLogic:\n- If 'Check File Exists' returned an error, file doesn't exist\n- If no error, file exists and we have the SHA for updating\n\nThis approach ensures we:\n1. Don't overwrite files accidentally\n2. Use proper GitHub API methods\n3. Handle both creation and update scenarios\n\nBranching strategy prevents API errors and maintains data integrity."
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "file",
+        "operation": "create",
+        "owner": {
+          "__rl": true,
+          "value": "your-github-username",
+          "mode": "name"
+        },
+        "repository": {
+          "__rl": true,
+          "value": "your-repository-name",
+          "mode": "name"
+        },
+        "filePath": "={{ $node['Process Data'].json.fileName }}",
+        "fileContent": "={{ $node['Process Data'].json.fileContent }}",
+        "commitMessage": "={{ $node['Process Data'].json.commitMessage }}"
+      },
+      "id": "create-file",
+      "name": "Create New File",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        200
+      ],
+      "notes": "📝 FILE CREATION NODE: Create new file in repository\n\nThis GitHub node creates a new file when it doesn't exist:\n- Uses data from 'Process Data' node\n- Creates file at specified path\n- Adds descriptive commit message\n\nGitHub API Details:\n- Operation: 'create' (for new files)\n- Requires: owner, repository, filePath, fileContent\n- Optional: commitMessage, branch (defaults to main)\n\nBest Practices:\n- Use meaningful commit messages\n- Organize files in logical directory structure\n- Consider file size limits (GitHub has 100MB limit)\n- Use appropriate file extensions\n\nError Handling:\n- Will fail if file already exists\n- Requires write permissions to repository"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "file",
+        "operation": "edit",
+        "owner": {
+          "__rl": true,
+          "value": "your-github-username",
+          "mode": "name"
+        },
+        "repository": {
+          "__rl": true,
+          "value": "your-repository-name",
+          "mode": "name"
+        },
+        "filePath": "={{ $node['Process Data'].json.fileName }}",
+        "fileContent": "={{ $node['Process Data'].json.fileContent }}",
+        "commitMessage": "={{ $node['Process Data'].json.commitMessage }} (updated)",
+        "sha": "={{ $node['Check File Exists'].json.sha }}"
+      },
+      "id": "update-file",
+      "name": "Update Existing File",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        400
+      ],
+      "notes": "✏️ FILE UPDATE NODE: Update existing file in repository\n\nThis GitHub node updates an existing file:\n- Uses SHA from 'Check File Exists' node (required for updates)\n- Overwrites existing content with new data\n- Appends '(updated)' to commit message for clarity\n\nGitHub API Requirements:\n- Operation: 'edit' (for existing files)\n- SHA: Unique identifier from current file version\n- Prevents conflicts with concurrent modifications\n\nUpdate Strategy:\n- Complete file replacement (not append)\n- Maintains Git history with descriptive commits\n- SHA ensures we're updating the expected version\n\nSecurity Notes:\n- SHA acts as optimistic locking mechanism\n- Prevents accidental overwrites\n- Maintains data integrity in collaborative environments"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process the result from either create or update operation\nconst inputData = $input.all();\n\n// Combine results from both possible paths\nlet result = null;\nlet operation = '';\n\n// Check which operation was performed\nfor (const item of inputData) {\n  if (item.json.content) {\n    result = item.json;\n    // Determine operation type based on the presence of certain fields\n    operation = item.json.content.sha ? 'updated' : 'created';\n    break;\n  }\n}\n\nif (!result) {\n  throw new Error('No valid GitHub operation result found');\n}\n\n// Prepare comprehensive response\nconst response = {\n  success: true,\n  operation: operation,\n  file: {\n    name: result.content.name,\n    path: result.content.path,\n    size: result.content.size,\n    sha: result.content.sha,\n    downloadUrl: result.content.download_url,\n    htmlUrl: result.content.html_url\n  },\n  commit: {\n    sha: result.commit.sha,\n    message: result.commit.message,\n    author: result.commit.author.name,\n    date: result.commit.author.date,\n    url: result.commit.html_url\n  },\n  repository: {\n    name: result.content.name,\n    fullName: `${result.commit.author.name}/${result.content.name}`\n  },\n  timestamp: new Date().toISOString(),\n  workflowInfo: {\n    executionId: $execution.id,\n    workflowId: $workflow.id,\n    node: 'Final Processing'\n  }\n};\n\nreturn { json: response };"
+      },
+      "id": "final-processor",
+      "name": "Final Processing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        300
+      ],
+      "notes": "🎯 FINAL PROCESSING NODE: Consolidate results and logging\n\nThis Code node processes the GitHub operation result:\n1. Determines which operation was performed (create/update)\n2. Extracts key information from GitHub response\n3. Creates comprehensive success report\n4. Adds workflow metadata for tracking\n\nOutput includes:\n- Operation status and type\n- File details (name, path, size, SHA, URLs)\n- Commit information (SHA, message, author, date)\n- Repository information\n- Execution metadata\n\nUse Cases:\n- Logging successful operations\n- Triggering downstream workflows\n- Sending notifications\n- Updating databases with file references\n- Audit trail creation\n\nThis node ensures you have complete information about the GitHub operation for further processing or notifications."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "log-entry",
+              "name": "logEntry",
+              "value": "=File {{ $json.operation }} successfully: {{ $json.file.name }} at {{ $json.timestamp }}",
+              "type": "string"
+            },
+            {
+              "id": "github-url",
+              "name": "githubUrl", 
+              "value": "={{ $json.file.htmlUrl }}",
+              "type": "string"
+            },
+            {
+              "id": "file-size",
+              "name": "fileSizeKB",
+              "value": "={{ Math.round($json.file.size / 1024 * 100) / 100 }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "create-summary",
+      "name": "Create Summary",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1560,
+        300
+      ],
+      "notes": "📊 SUMMARY NODE: Create human-readable summary\n\nThis Set node creates clean, formatted outputs:\n- logEntry: Human-readable operation summary\n- githubUrl: Direct link to view file on GitHub\n- fileSizeKB: File size in kilobytes for monitoring\n\nFormatting Features:\n- Dynamic operation type (created/updated)\n- Timestamp in ISO format\n- File size calculation and rounding\n- Ready-to-use GitHub URLs\n\nPerfect for:\n- Dashboard displays\n- Email notifications\n- Slack messages\n- Database logging\n- API responses\n\nThe Set node is ideal for preparing data for external systems that need specific field names or formats."
     }
   ],
-  "connections": {}
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Process Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Data": {
+      "main": [
+        [
+          {
+            "node": "Check File Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check File Exists": {
+      "main": [
+        [
+          {
+            "node": "File Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "File Exists?": {
+      "main": [
+        [
+          {
+            "node": "Create New File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Existing File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create New File": {
+      "main": [
+        [
+          {
+            "node": "Final Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Existing File": {
+      "main": [
+        [
+          {
+            "node": "Final Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final Processing": {
+      "main": [
+        [
+          {
+            "node": "Create Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {},
+  "tags": [
+    {
+      "createdAt": "2024-01-15T10:30:00.000Z",
+      "updatedAt": "2024-01-15T10:30:00.000Z",
+      "id": "github-automation",
+      "name": "GitHub Automation"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-15T10:30:00.000Z",
+  "versionId": "1"
 }
