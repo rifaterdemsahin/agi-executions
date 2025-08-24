@@ -1,0 +1,15 @@
+{
+  "name": "Sample Logging Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "functionCode": "const fs = require('fs');\nfs.appendFileSync('/workspaces/agi-executions/logs/n8n/sample.log', 'Workflow executed at ' + new Date().toISOString() + '\n');\nreturn items;"
+      },
+      "name": "Log Execution",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [450, 300]
+    }
+  ],
+  "connections": {}
+}
